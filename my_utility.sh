@@ -50,28 +50,26 @@ TEMP_ERROR_FILE=$(mktemp)
 while true; do
     case "$1" in
         -u|--users)
-            list_users
+            LIST_USERS=true
             shift
             ;;
         -p|--processes)
-            list_processes
+            LIST_PROCESSES=true
             shift
             ;;
         -l|--log)
             LOG_FILE="$2"
             check_path "$LOG_FILE"
-            exec > "$LOG_FILE"
             shift 2
             ;;
         -e|--errors)
             ERROR_FILE="$2"
             check_path "$ERROR_FILE"
-            exec 2> >(tee -a "$TEMP_ERROR_FILE" >&2)
             shift 2
             ;;
         -h|--help)
             show_help
-            shift
+            exit 0
             ;;
         --)
             shift
@@ -85,9 +83,23 @@ while true; do
     esac
 done
 
-# Вывод в лог-файл
+# Перенаправление stderr в файл, если указан
+if [ -n "$ERROR_FILE" ]; then
+    exec 2> >(tee -a "$TEMP_ERROR_FILE" >&2)
+fi
+
+# Перенаправление stdout в файл, если указан
 if [ -n "$LOG_FILE" ]; then
-    list_processes >> "$LOG_FILE"
+    exec > "$LOG_FILE"
+fi
+
+# Выполнение действий
+if [ "$LIST_USERS" = true ]; then
+    list_users
+fi
+
+if [ "$LIST_PROCESSES" = true ]; then
+    list_processes
 fi
 
 # Проверка ошибок и запись сообщения об отсутствии ошибок, если их нет
