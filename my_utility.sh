@@ -1,24 +1,37 @@
 #!/bin/bash
 
-# -h, --help        Функция для вывода справки
+# Функция для вывода справки
 show_help() {
-    echo "Использование: $0 [OPTIONS]"
-    echo "[OPTIONS]:"
-    echo "  -h, --help          Выводит данную справку"
-    echo "  -u, --users         Выводит перечень пользователей и их домашних директорий"
-    echo "  -p, --processes     Выводит перечень запущенных процессов (номер и название)"
-    echo "  -l, --log PATH      Замещает вывод на экран выводом в файл по заданному пути PATH"
-    echo "  -e, --errors PATH   Замещает вывод ошибок из потока stderr в файл по заданному пути PATH"
+    cat <<EOF
+Использование: $0 [OPTIONS]
+
+Опции:
+  -u, --users         Выводит перечень пользователей и их домашних директорий
+  -p, --processes     Выводит перечень запущенных процессов (номер и название)
+  -h, --help          Выводит данную справку
+  -l PATH, --log PATH    Замещает вывод на экран выводом в файл по заданному пути PATH
+  -e PATH, --errors PATH   Замещает вывод ошибок из потока stderr в файл по заданному пути PATH
+
+Примеры:
+  $0 --users
+  $0 --processes --log output.txt
+  $0 --users --log output.txt
+  $0 --users --errors error.log
+  $0 --processes --errors error.log
+  $0 --users --errors --log output.log
+  $0 --processes --errors --log output.log
+EOF
+    exit 0
 }
 
-# -u, --users        Функция для вывода пользователей и их домашних директорий
+# Функция для вывода пользователей и их домашних директорий
 list_users() {
-    getent passwd | awk -F: '{print $1, $6}' | sort
+    getent passwd | awk -F: '$3 >= 1000 {print $1 "\t" $6}' /etc/passwd | sort
 }
 
-# -p, --processes        Функция для вывода запущенных процессов
+# Функция для вывода запущенных процессов
 list_processes() {
-    ps -e -o pid,comm | sort -n
+    ps -eo pid,cmd,start --sort=pid
 }
 
 # Функция для проверки доступа к пути
@@ -28,88 +41,108 @@ check_path() {
         touch "$path"
     fi
     if [ ! -w "$path" ]; then
-        echo "Ошибка записи в файл $path" >&2
+        log_error "Ошибка записи в файл $path"
         exit 1
     fi
 }
 
-# Обработка аргументов командной строки
-TEMP=$(getopt -o uphl:e: --long users,processes,help,log:,errors: -n 'SysInfoHelper.sh' -- "$@")
-if [ $? != 0 ]; then
-    echo "Ошибка в параметрах" >&2
-    show_help
-    exit 1
-fi
+# Функция для логирования ошибок
+log_error() {
+    local message="$1"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] [ERROR] $message" | tee -a "$ERROR_FILE"
+}
 
-eval set -- "$TEMP"
+# Функция для проверки пути
+validate_path() {
+    local path="$1"
+    if [[ ! -d "$(dirname "$path")" ]]; then
+        log_error "Ошибка: директория для файла '$path' не существует или недоступна для записи."
+        return 1
+    fi
+    return 0
+}
 
-LOG_FILE=""
-ERROR_FILE=""
-TEMP_ERROR_FILE=$(mktemp)
+# Основная функция
+main() {
+    local log_path=""
+    local error_path=""
+    local action=""
 
-while true; do
-    case "$1" in
-        -u|--users)
-            LIST_USERS=true
-            shift
+    # Парсинг аргументов с помощью getopt
+    TEMP=$(getopt -o upl:e:h --long users,processes,log:,errors:,help -n "$0" -- "$@")
+    if [[ $? -ne 0 ]]; then
+        log_error "Ошибка: неверные параметры."
+        show_help
+        exit 1
+    fi
+    eval set -- "$TEMP"
+
+    # Обработка аргументов
+    while true; do
+        case "$1" in
+            -u|--users)
+                action="users"
+                shift
+                ;;
+            -p|--processes)
+                action="processes"
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -l|--log)
+                log_path="$2"
+                shift 2
+                ;;
+            -e|--errors)
+                error_path="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                log_error "Ошибка: неизвестный параметр $1."
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+
+    # Проверка и установка log path
+    if [[ -n "$log_path" ]]; then
+        validate_path "$log_path" || exit 1
+        exec >"$log_path"
+    fi
+
+    # Проверка и установка вывода ошибок
+    if [[ -n "$error_path" ]]; then
+        validate_path "$error_path" || exit 1
+        exec 2>"$error_path"
+    else
+        ERROR_FILE="error_log.txt"
+        check_path "$ERROR_FILE"
+        exec 2> >(tee -a "$ERROR_FILE" >&2)
+    fi
+
+    # Выполнение действий
+    case "$action" in
+        users)
+            list_users
             ;;
-        -p|--processes)
-            LIST_PROCESSES=true
-            shift
-            ;;
-        -l|--log)
-            LOG_FILE="$2"
-            check_path "$LOG_FILE"
-            shift 2
-            ;;
-        -e|--errors)
-            ERROR_FILE="$2"
-            check_path "$ERROR_FILE"
-            shift 2
-            ;;
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        --)
-            shift
-            break
+        processes)
+            list_processes
             ;;
         *)
-            echo "Ошибка в параметрах" >&2
+            log_error "Ошибка: действие не задано."
             show_help
             exit 1
             ;;
     esac
-done
+}
 
-# Перенаправление stderr в файл, если указан
-if [ -n "$ERROR_FILE" ]; then
-    exec 2> >(tee -a "$TEMP_ERROR_FILE" >&2)
-fi
-
-# Перенаправление stdout в файл, если указан
-if [ -n "$LOG_FILE" ]; then
-    exec > "$LOG_FILE"
-fi
-
-# Выполнение действий
-if [ "$LIST_USERS" = true ]; then
-    list_users
-fi
-
-if [ "$LIST_PROCESSES" = true ]; then
-    list_processes
-fi
-
-# Проверка ошибок и запись сообщения об отсутствии ошибок, если их нет
-if [ -s "$TEMP_ERROR_FILE" ]; then
-    cat "$TEMP_ERROR_FILE" >> "$ERROR_FILE"
-else
-    if [ -n "$ERROR_FILE" ]; then
-        echo "Ошибок нет" >> "$ERROR_FILE"
-    fi
-fi
-
-# Удаление временного файла ошибок
-rm -f "$TEMP_ERROR_FILE"
+main "$@"
