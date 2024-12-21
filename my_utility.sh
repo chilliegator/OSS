@@ -43,7 +43,6 @@ ch_and_create_file() {
         exit 1
     fi
 }
-
 # Функция перенаправления стандартного вывода
 r_stdout() {
     local log_PATH="$1"
